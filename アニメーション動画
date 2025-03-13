@@ -1,0 +1,351 @@
+% 車両運動のシミュレーションと前車軸の振動のフーリエ変換（ハイパスフィルタ適用）
+clear;
+clc;
+
+% パラメータ設定
+m1 = 1900;   % 車体質量 [kg]
+m2 = 50;     % 前車軸の質量 [kg]
+m3 = 50;     % 後車軸の質量 [kg]
+k1 = 33e3;   % 前サスペンション剛性 [N/m]
+k2 = 31e3;   % 後サスペンション剛性 [N/m]
+k3 = 260e3;  % 前タイヤ剛性 [N/m]
+k4 = 260e3;  % 後タイヤ剛性 [N/m]
+c1 = 300;    % 前サスペンション減衰係数 [Ns/m]
+c2 = 300;    % 後サスペンション減衰係数 [Ns/m]
+l1 = 1.34;   % 重心から前車軸までの距離 [m]
+l2 = 1.46;   % 重心から後車軸までの距離 [m]
+J = 3000;    % 車体の慣性モーメント [kg*m^2]
+h = 0.02;    % ハンプの高さ [m]
+L = 10;      % ハンプの長さ [m]
+v = 10;      % 車両速度 [m/s]
+
+% 時間設定
+dt = 0.001;   % 時間刻み [s]
+t_end = 5;    % シミュレーション時間 [s]
+t = 0:dt:t_end;
+
+% 初期条件
+x1 = zeros(size(t)); dx1 = zeros(size(t)); % 車体の上下運動
+theta = zeros(size(t)); dtheta = zeros(size(t)); % 車体の回転運動
+x2 = zeros(size(t)); dx2 = zeros(size(t)); % 前車軸の上下運動
+x3 = zeros(size(t)); dx3 = zeros(size(t)); % 後車軸の上下運動
+
+% 結果保存用
+Ff = zeros(size(t)); % 前サスペンション力
+Fr = zeros(size(t)); % 後サスペンション力
+
+% 路面入力関数
+road_input = @(s) h * (s >= 0 & s <= L) .* (1 - cos(pi * s / L)) / 2;
+
+% シミュレーションループ
+for i = 1:length(t)-1
+    % 路面入力
+    y1 = road_input(v * t(i) - l1); % 前車軸の路面高さ
+    y2 = road_input(v * t(i) + l2); % 後車軸の路面高さ
+
+    % サスペンション力
+    Ff(i) = -k1 * ((x1(i) - l1 * theta(i)) - x2(i)) - c1 * ((dx1(i) - l1 * dtheta(i)) - dx2(i));
+    Fr(i) = -k2 * ((x1(i) + l2 * theta(i)) - x3(i)) - c2 * ((dx1(i) + l2 * dtheta(i)) - dx3(i));
+
+    % タイヤ力
+    Fy1 = -k3 * (x2(i) - y1);
+    Fy2 = -k4 * (x3(i) - y2);
+
+    % 車体の運動方程式
+    ddx1 = 2 * (Ff(i) + Fr(i)) / m1;
+    ddtheta = 2 * (-Ff(i) * l1 + Fr(i) * l2) / J;
+
+    % 車軸の運動方程式
+    ddx2 = (-k3 * (x2(i) - y1) - Ff(i)) / m2;
+    ddx3 = (-k4 * (x3(i) - y2) - Fr(i)) / m3;
+
+    % 状態更新 (オイラー法)
+    dx1(i+1) = dx1(i) + ddx1 * dt;
+    x1(i+1) = x1(i) + dx1(i) * dt;
+
+    dtheta(i+1) = dtheta(i) + ddtheta * dt;
+    theta(i+1) = theta(i) + dtheta(i) * dt;
+
+    dx2(i+1) = dx2(i) + ddx2 * dt;
+    x2(i+1) = x2(i) + dx2(i) * dt;
+
+    dx3(i+1) = dx3(i) + ddx3 * dt;
+    x3(i+1) = x3(i) + dx3(i) * dt;
+end
+
+% 最後のサスペンション力を計算
+Ff(end) = -k1 * ((x1(end) - l1 * theta(end)) - x2(end)) - c1 * ((dx1(end) - l1 * dtheta(end)) - dx2(end));
+Fr(end) = -k2 * ((x1(end) + l2 * theta(end)) - x3(end)) - c2 * ((dx1(end) + l2 * dtheta(end)) - dx3(end));
+
+% グラフ描画 (軸重値)
+figure;
+plot(t, Ff, 'b', 'LineWidth', 1.5);
+hold on;
+plot(t, Fr, 'r', 'LineWidth', 1.5);
+xlabel('時間 [s]');
+ylabel('力 [N]');
+legend('前車軸の力', '後車軸の力');
+title('軸重値の時間変化');
+grid on;
+
+% 前車軸の振動のフーリエ変換
+X = x1; % 前車軸の垂直変位
+N = length(X);
+fs = 1/dt; % サンプリング周波数
+f = (0:N-1)*(fs/N); % 周波数軸
+
+Y = fft(X);
+P2 = abs(Y/N);
+P1 = P2(1:floor(N/2)+1);
+f = f(1:floor(N/2)+1);
+
+% ハイパスフィルタ (カットオフ周波数を設定)
+fc = 5; % カットオフ周波数 [Hz]
+[b, a] = butter(4, fc/(fs/2), 'high');
+X_filtered = filtfilt(b, a, X);
+
+% フィルタ後の振動のグラフ
+figure;
+subplot(2,1,1);
+plot(t, X, 'b', 'LineWidth', 1);
+hold on;
+plot(t, X_filtered, 'r', 'LineWidth', 1);
+xlabel('時間 [s]');
+ylabel('変位 [m]');
+legend('元の信号', 'ハイパスフィルタ後の信号');
+title('前車軸の振動（時間領域）');
+grid on;
+
+% フーリエ変換後の振幅スペクトル
+subplot(2,1,2);
+plot(f, P1, 'LineWidth', 1);
+xlabel('周波数 [Hz]');
+ylabel('振幅');
+title('前車軸振動の周波数スペクトル');
+grid on;
+xlim([0, 50]); % 周波数軸の範囲を設定
+
+
+
+% 1. シミュレーションデータの生成（前回のコードを使用）
+% （前回のシミュレーションコードをここに含めます）
+% ここでは、前車軸の変位 x2、および軸重値 Ff を計算しています。
+
+% --- ここまでが前回のコード ---
+
+% 2. ローパスフィルタとハイパスフィルタの適用
+
+% サンプリング周波数とカットオフ周波数の設定
+fs = 1/dt; % サンプリング周波数
+fc_low = 5; % ローパスフィルタのカットオフ周波数 [Hz]
+fc_high = 5; % ハイパスフィルタのカットオフ周波数 [Hz]
+
+% ローパスフィルタの設計と適用
+[b_low, a_low] = butter(4, fc_low/(fs/2), 'low');
+X_low = filtfilt(b_low, a_low, x2);
+
+% ハイパスフィルタの設計と適用
+[b_high, a_high] = butter(4, fc_high/(fs/2), 'high');
+X_high = filtfilt(b_high, a_high, x2);
+
+% 3. ARXモデルの構築
+
+% システム同定のためのデータ準備
+% 入力：前車軸の路面入力 y1
+% 出力：前車軸の変位（フィルタ処理後）X_low または X_high
+
+% 路面入力データの生成
+y1_data = zeros(size(t));
+for i = 1:length(t)
+    y1_data(i) = road_input(v * t(i) - l1); % 前車軸の路面高さ
+end
+
+% データの準備（System Identification Toolbox を使用）
+% ローパスフィルタ後のデータを使用
+data_low = iddata(X_low', y1_data', dt);
+
+% ハイパスフィルタ後のデータを使用
+data_high = iddata(X_high', y1_data', dt);
+
+% ARXモデルの次数設定 [na nb nk]
+% na: 出力の自己回帰次数
+% nb: 入力の回帰次数
+% nk: 入力から出力への遅延
+
+% 適切な次数を選択（ここでは例として na=2, nb=2, nk=1 としている）
+na = 2;
+nb = 2;
+nk = 1;
+
+
+% ローパスフィルタ後のデータからARXモデルを構築
+model_low = arx(data_low, [na nb nk]);
+
+% ハイパスフィルタ後のデータからARXモデルを構築
+model_high = arx(data_high, [na nb nk]);
+
+% 4. モデルの評価
+
+% モデルのパラメータを表示
+disp('--- ローパスフィルタ後のARXモデル ---');
+disp(model_low);
+
+disp('--- ハイパスフィルタ後のARXモデル ---');
+disp(model_high);
+
+% モデルと実測データの比較プロット
+figure;
+compare(data_low, model_low);
+title('ローパスフィルタ後のデータとARXモデルの比較');
+
+figure;
+compare(data_high, model_high);
+title('ハイパスフィルタ後のデータとARXモデルの比較');
+
+
+% ---- 事前にシミュレーション実行しておく ----
+%  (x1, theta, x2, x3, t などが計算済みとする)
+
+close all;
+
+% パラメータの再掲（車体長、重心から前後車軸までの距離など）
+l1 = 1.34;  % 車体重心から前車軸までの距離
+l2 = 1.46;  % 車体重心から後車軸までの距離
+car_length = l1 + l2;  % 車体のホイールベース相当
+
+% 車体を長方形で表現する場合、車高(車体の厚み)を仮に設定
+car_height = 0.4;  
+
+% アニメーション用の図をセットアップ
+figure('Name','Vehicle Animation','Position',[100 100 1200 400]);
+hold on; grid on;
+xlabel('車両進行方向 x [m]');
+ylabel('高さ z [m]');
+
+% 路面の形状を描画
+%  例えば、x方向に細かく点をとり、road_inputを使って高さをplot
+x_road = linspace(-5, 15, 500);  % 適宜範囲を設定
+z_road = arrayfun(@(x) road_input(x), x_road);
+plot(x_road, z_road, 'k','LineWidth',2);
+
+% 軸の範囲設定(適宜調整)
+xlim([-5 15]);
+ylim([-0.5 1.5]);
+
+% 車体を表すパッチ/ラインを作成 (初期状態)
+% -------------------------------------------------
+% ここで、車体の中心を xC, zC 、回転角 thetaC で表現するとして、
+% 前後車軸の接地点などを計算してパッチを作成します。
+
+% 初期フレーム( i=1 ) の車体位置と角度
+i = 1;
+thetaC = theta(i);   % ピッチ角
+xC = v*t(i);         % 進行方向の移動(単純に v*t(i) とした場合)
+zC = x1(i);          % シミュレーションでは x1 は車体(重心)の鉛直変位
+
+% 車体矩形の四隅を計算 (2D)
+% 車体の中心を (xC, zC) とし、車体長さは car_length、高さは car_height
+% ピッチ角 thetaC 回転を考慮
+halfL = car_length/2;
+halfH = car_height/2;
+
+% 車体矩形4頂点(未回転のとき:中心基準)を定義
+% [ ( - halfL, + halfH ),
+%   ( + halfL, + halfH ),
+%   ( + halfL, - halfH ),
+%   ( - halfL, - halfH ) ]
+carX_local = [-halfL, +halfL, +halfL, -halfL];
+carZ_local = [+halfH, +halfH, -halfH, -halfH];
+
+% ピッチ回転を座標変換
+Rot = [ cos(thetaC), -sin(thetaC);
+        sin(thetaC),  cos(thetaC) ];
+for k = 1:4
+    local = [carX_local(k); carZ_local(k)];
+    global_ = Rot * local;
+    carX_global(k) = xC + global_(1);
+    carZ_global(k) = zC + global_(2);
+end
+
+% パッチ作成
+hPatchCar = patch(carX_global, carZ_global, 'b');  
+set(hPatchCar,'FaceAlpha',0.3,'EdgeColor','b','LineWidth',2);
+
+% 前後車軸(タイヤ)の描画(単純に点や小円など)
+%  ここでは点で描く例
+hFrontAxle = plot(0,0,'ro','MarkerSize',6,'MarkerFaceColor','r');
+hRearAxle  = plot(0,0,'ro','MarkerSize',6,'MarkerFaceColor','r');
+
+% -------------------------------------------------
+% アニメーションループ開始
+% -------------------------------------------------
+for i = 1:length(t)
+    % 1) 車体中心の位置 (xC, zC)
+    %    - x方向(進行方向)は v*t(i) で計算(単純モデル)
+    %    - z方向はシミュレーションの x1(i) (車体重心上下変位)
+    xC = v*t(i);
+    zC = x1(i);
+
+    % 2) ピッチ角 thetaC
+    thetaC = theta(i);
+
+    % 3) 車体矩形座標を更新
+    %    さきほどと同様に、回転行列を使って更新
+    Rot = [ cos(thetaC), -sin(thetaC);
+            sin(thetaC),  cos(thetaC) ];
+    for k = 1:4
+        local = [carX_local(k); carZ_local(k)];
+        global_ = Rot * local;
+        carX_global(k) = xC + global_(1);
+        carZ_global(k) = zC + global_(2);
+    end
+
+    % パッチの頂点座標を更新
+    set(hPatchCar,'XData',carX_global,'YData',carZ_global);
+
+    % 4) 前後車軸の描画
+    %    - 前軸は ( xC - l1 回転成分, x2(i) ) みたいに考えるか、
+    %      あるいは「重心から l1 離れた位置」をきちんと回転行列で求めるか。
+    %      ここでは簡単にシミュレーション結果 x2(i) を z座標とし、
+    %      x座標は xC - l1 + α としておく(ただしピッチ角を正確に反映させるなら回転成分を追加)
+    %    - 後軸についても同様。
+    
+    % （簡単化）: 前軸の x座標 = xC - l1, 後軸の x座標 = xC + l2
+    %              z座標 = x2(i), x3(i)
+    xFrontAxle = xC - l1;
+    zFrontAxle = x2(i);
+    xRearAxle  = xC + l2;
+    zRearAxle  = x3(i);
+    
+    set(hFrontAxle, 'XData', xFrontAxle, 'YData', zFrontAxle);
+    set(hRearAxle,  'XData', xRearAxle,  'YData', zRearAxle);
+
+    % 5) 描画を更新
+    drawnow;
+    
+    % 動きが速すぎる場合は少し待つ
+    pause(0.01);
+end
+
+x_road = linspace(-5, 15, 500);
+z_road = arrayfun(@(x) road_input(x), x_road);
+plot(x_road, z_road, 'k','LineWidth',2);
+
+% 動画ファイル作成例
+v = VideoWriter('vehicle_animation.mp4','MPEG-4');
+open(v);
+
+figure;
+% ... (描画設定など)
+
+for i = 1:length(t)
+    % ここで図を更新する処理
+    drawnow;
+    
+    % フレームを動画に追加
+    frame = getframe(gcf);
+    writeVideo(v, frame);
+end
+
+close(v);
+
